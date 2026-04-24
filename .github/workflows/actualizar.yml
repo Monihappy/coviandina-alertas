@@ -1,0 +1,38 @@
+name: Actualizar Alertas Coviandina
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # Se ejecuta cada 15 minutos
+  workflow_dispatch: # Botón manual para pruebas
+
+jobs:
+  actualizar-estado-via:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar los archivos del repositorio
+        uses: actions/checkout@v3
+
+      - name: Preparar el sistema (Python)
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10' # Usamos una versión estable de Python
+
+      - name: Instalar librerías necesarias
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests tweepy 
+          # (Si tiene un archivo requirements.txt, cambie la línea de arriba por: pip install -r requirements.txt)
+
+      - name: Ejecutar el cerebro (fetch_alerts.py)
+        env:
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+          # Si su script usa API_KEY u otros nombres, cámbielos aquí
+        run: python fetch_alerts.py
+
+      - name: Guardar el nuevo alerts.json
+        run: |
+          git config --global user.name 'Robot-Coviandina'
+          git config --global user.email 'robot@coviandina.com'
+          git add alerts.json
+          git commit -m "Actualización automática de alertas.json" || exit 0
+          git push
