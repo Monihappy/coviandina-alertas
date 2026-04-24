@@ -1,78 +1,91 @@
 import requests
-import xml.etree.ElementTree as ET
 import json
 import os
 import re
 from datetime import datetime, timezone
 
-RSS_SOURCES = [
-    "https://xcancel.com/CoviandinaSAS/rss",
-    "https://nitter.privacyredirect.com/CoviandinaSAS/rss",
-    "https://nitter.poast.org/CoviandinaSAS/rss",
-]
+# URL oculta de Twitter para leer tuits públicos (usada por sus widgets)
+TWITTER_SYNDICATION_URL = "https://cdn.syndication.twimg.com/tweet-result?id=1" # Base URL
+USER_SCREEN_NAME = "CoviandinaSAS"
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CoviandnaBot/1.0)"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json"
+}
 
 def detect_badge(text):
     t = text.lower()
     if any(w in t for w in ["cierre", "cerrad", "suspens", "bloqueo", "emergencia"]):
-        return "danger"
+        return "danger" # Rojo
     if any(w in t for w in ["restricc", "intervenc", "reduccion", "precaucion", "reducción", "precaución"]):
-        return "warn"
+        return "warn"   # Amarillo
     if any(w in t for w in ["habilitad", "reapert", "normaliz", "transit", "opera"]):
-        return "ok"
-    return "info"
+        return "ok"     # Verde
+    return "info"       # Azul
 
-def strip_html(html):
-    clean = re.sub(r"<[^>]+>", " ", html)
-    clean = (clean
-             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-             .replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " "))
-    return re.sub(r"\s{2,}", " ", clean).strip()
-
-def fetch_from_source(url):
-    r = requests.get(url, timeout=15, headers=HEADERS)
+def fetch_latest_tweets():
+    # Usamos el endpoint de syndication que no requiere API Keys
+    url = f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{USER_SCREEN_NAME}"
+    r = requests.get(url, headers=HEADERS, timeout=15)
     r.raise_for_status()
-    root = ET.fromstring(r.content)
-    items = root.findall(".//item")
-    if not items:
-        raise ValueError("Feed vacío")
+    
+    # Extraer el JSON oculto en el HTML
+    html_content = r.text
+    json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>', html_content)
+    
+    if not json_match:
+        raise ValueError("No se pudo extraer el JSON de Twitter")
+        
+    data = json.loads(json_match.group(1))
+    
+    # Navegar por el JSON (Estructura de timeline)
+    instructions = data['props']['pageProps']['timeline']['entries']
+    
     alerts = []
-    for item in items[:6]:
-        title       = item.findtext("title", "")
-        description = item.findtext("description", "")
-        link        = item.findtext("link", "https://x.com/CoviandinaSAS")
-        pub_date    = item.findtext("pubDate", "")
-        text        = strip_html(description or title)
-        alerts.append({
-            "text":    text,
-            "link":    link.strip(),
-            "pubDate": pub_date,
-            "badge":   detect_badge(text)
-        })
+    for entry in instructions[:6]: # Tomar los últimos 6
+        try:
+            if 'tweet' in entry['content']['tweet']:
+                tweet_data = entry['content']['tweet']
+                text = tweet_data['full_text']
+                id_str = tweet_data['id_str']
+                created_at = tweet_data['created_at']
+                link = f"https://x.com/{USER_SCREEN_NAME}/status/{id_str}"
+                
+                alerts.append({
+                    "text": text,
+                    "link": link,
+                    "pubDate": created_at,
+                    "badge": detect_badge(text)
+                })
+        except KeyError:
+            continue
+            
+    if not alerts:
+        raise ValueError("Timeline vacío o estructura cambiada")
+        
     return alerts
 
 def main():
-    result = None
-    for src in RSS_SOURCES:
-        try:
-            alerts = fetch_from_source(src)
-            result = {
-                "status":    "ok",
-                "source":    src,
-                "updatedAt": datetime.now(timezone.utc).isoformat(),
-                "alerts":    alerts
-            }
-            print(f"OK: {len(alerts)} alertas desde {src}")
-            break
-        except Exception as e:
-            print(f"FALLO ({src}): {e}")
-
-    if result:
+    try:
+        print(f"Obteniendo tuits públicos de @{USER_SCREEN_NAME}...")
+        alerts = fetch_latest_tweets()
+        
+        result = {
+            "status": "ok",
+            "source": "twitter_syndication",
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+            "alerts": alerts
+        }
+        
         with open("alerts.json", "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-    else:
-        # Mantener datos anteriores marcados como "stale" si existen
+            
+        print(f"ÉXITO: Se guardaron {len(alerts)} alertas.")
+        
+    except Exception as e:
+        print(f"FALLO: {e}")
+        
+        # Mantener datos anteriores si falla
         if os.path.exists("alerts.json"):
             with open("alerts.json", "r", encoding="utf-8") as f:
                 old = json.load(f)
@@ -80,11 +93,10 @@ def main():
             old["staleSince"] = datetime.now(timezone.utc).isoformat()
             with open("alerts.json", "w", encoding="utf-8") as f:
                 json.dump(old, f, ensure_ascii=False, indent=2)
-            print("Todas las fuentes fallaron. Conservando datos anteriores.")
+            print("Conservando datos anteriores.")
         else:
             with open("alerts.json", "w", encoding="utf-8") as f:
                 json.dump({"status": "error", "updatedAt": datetime.now(timezone.utc).isoformat(), "alerts": []}, f)
-            print("Sin datos y sin respaldo. Archivo vacío generado.")
 
 if __name__ == "__main__":
     main()
