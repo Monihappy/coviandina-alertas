@@ -1,6 +1,7 @@
 {
-  "status": "ok",
+  "status": "stale",
   "source": "placeholder",
   "updatedAt": "2026-04-13T09:10:50.522588+00:00",
-  "alerts": []
+  "alerts": [],
+  "staleSince": "2026-04-24T20:36:21.410438+00:00"
 }
